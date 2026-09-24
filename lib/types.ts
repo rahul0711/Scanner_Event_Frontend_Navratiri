@@ -6,15 +6,12 @@ export interface User {
 }
 
 export interface InOutEntry {
-  employeeName: string;
-  logDate: string;          // "YYYY-MM-DD HH:mm:ss"
-  registrationId: string;
-  childRegistrationId: string;
-  attendanceDate: string;
-  firstName: string;
-  lastName: string;
-  qrId: string | null;
+  eventLogId: number;
+  logDate: string;
+  qrId: number | null;
   qrName: string | null;
+  inFlag: string | null;
+  passValidity: string | null;
 }
 
 export interface GuestDetails {

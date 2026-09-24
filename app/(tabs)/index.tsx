@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,47 +8,101 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  TextInput,
+  Dimensions,
+  Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/store/authStore';
 import { apiService } from '@/services/api';
-import { LogOut, QrCode, Check, X } from 'lucide-react-native';
+import { LogOut, Check, X, ScanLine, Camera } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { GuestDetails } from '@/lib/types';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CAMERA_SIZE = SCREEN_WIDTH - 48;
+
+type ScanAction = 'ASK' | 'IN' | 'OUT';
 
 export default function ScanTab() {
   const [guest, setGuest] = useState<GuestDetails | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [manualValue, setManualValue] = useState('');
   const [attendanceResult, setAttendanceResult] = useState<{
     success: boolean;
     message: string;
   } | null>(null);
+  const [defaultAction, setDefaultAction] = useState<ScanAction>('ASK');
+  const [scanned, setScanned] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
   const user = useAuthStore((state) => state.user);
-
   const logout = useAuthStore((state) => state.logout);
   const router = useRouter();
 
-  const handleLookup = async () => {
-    const qrValue = manualValue.trim();
-    if (!qrValue || loading) return;
+  const handleBarCodeScanned = async ({ data }: { data: string }) => {
+    if (scanned || loading) return;
+    setScanned(true);
+
+    const qrValue = data.trim();
+    if (!qrValue) {
+      setScanned(false);
+      return;
+    }
 
     setLoading(true);
-
     try {
       const guests = await apiService.getEmployeeByBarcode(qrValue);
       console.log('guests::', guests);
       if (Array.isArray(guests) && guests[0]) {
         setGuest(guests[0]);
         setAttendanceResult(null);
-        setShowDialog(true);
+
+        if (defaultAction === 'ASK') {
+          setShowDialog(true);
+        } else {
+          // Auto-process based on default action
+          await processAttendance(guests[0], defaultAction);
+        }
       } else {
         Alert.alert('Error', 'Visitor not found');
+        setScanned(false);
       }
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to fetch guest data');
+      setScanned(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const processAttendance = async (guestData: GuestDetails, type: 'IN' | 'OUT') => {
+    if (!guestData || !user) return;
+
+    setLoading(true);
+    try {
+      const result = await apiService.createAttendanceEntry(
+        {
+          EventLogId: guestData.eventLogId,
+          QrName: guestData.qrName,
+          QrId: guestData.qrId != null ? String(guestData.qrId) : null,
+        },
+        type,
+      );
+
+      setAttendanceResult({
+        success: result?.value !== false,
+        message:
+          result?.message ||
+          `${guestData.fullName || guestData.qrName || 'Visitor'} marked as ${type} successfully`,
+      });
+      setShowDialog(true);
+    } catch (error: any) {
+      setAttendanceResult({
+        success: false,
+        message: error.message || 'Failed to record attendance',
+      });
+      setShowDialog(true);
     } finally {
       setLoading(false);
     }
@@ -87,8 +141,8 @@ export default function ScanTab() {
   const closeDialog = () => {
     setShowDialog(false);
     setGuest(null);
-    setManualValue('');
     setAttendanceResult(null);
+    setScanned(false);
   };
 
   const handleLogout = () => {
@@ -106,47 +160,129 @@ export default function ScanTab() {
     ]);
   };
 
+  // Camera permission handling
+  if (!permission) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.centeredMessage}>
+          <ActivityIndicator size="large" color="#0042BF" />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!permission.granted) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.centeredMessage}>
+          <Camera size={48} color="#0042BF" />
+          <Text style={styles.permissionTitle}>Camera Permission Required</Text>
+          <Text style={styles.permissionText}>
+            We need camera access to scan QR codes
+          </Text>
+          <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
+            <Text style={styles.permissionButtonText}>Grant Permission</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>SI Events scanner</Text>
-          <Text style={styles.headerSubtitle}>Enter Guest QR Value</Text>
+          <Text style={styles.headerTitle}>AMS QR Scanner</Text>
+          <Text style={styles.headerSubtitle}>Scan Employee QR Code</Text>
         </View>
         <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
-          <LogOut size={24} color="#0042BF" />
+          <LogOut size={22} color="#0042BF" />
         </TouchableOpacity>
       </View>
 
-      <View style={styles.manualContainer}>
-        <TextInput
-          style={styles.manualInput}
-          placeholder="Enter QR value"
-          placeholderTextColor="#888"
-          value={manualValue}
-          onChangeText={setManualValue}
-          autoCapitalize="none"
-          autoCorrect={false}
-          editable={!loading}
-          onSubmitEditing={handleLookup}
-        />
-        <TouchableOpacity
-          style={[styles.button, (!manualValue.trim() || loading) && styles.buttonDisabled]}
-          onPress={handleLookup}
-          disabled={!manualValue.trim() || loading}>
-          <Text style={styles.buttonText}>{loading ? 'Looking up...' : 'Lookup'}</Text>
-        </TouchableOpacity>
+      {/* Divider */}
+      <View style={styles.divider} />
+
+      {/* Default Scan Action Toggle
+      <View style={styles.actionRow}>
+        <Text style={styles.actionLabel}>Default Scan Action</Text>
+        <View style={styles.actionToggleGroup}>
+          {(['ASK', 'IN', 'OUT'] as ScanAction[]).map((action) => (
+            <TouchableOpacity
+              key={action}
+              style={[
+                styles.actionToggle,
+                defaultAction === action && styles.actionToggleActive,
+              ]}
+              onPress={() => setDefaultAction(action)}>
+              <Text
+                style={[
+                  styles.actionToggleText,
+                  defaultAction === action && styles.actionToggleTextActive,
+                ]}>
+                {action}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View> */}
+
+      {/* Camera Preview */}
+      <View style={styles.cameraWrapper}>
+        <View style={styles.cameraContainer}>
+          <CameraView
+            style={styles.camera}
+            facing="back"
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr', 'code128', 'code39', 'ean13', 'ean8'],
+            }}
+            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+          />
+          {/* Scan overlay */}
+          <View style={styles.scanOverlay}>
+            <View style={styles.scanFrame}>
+              <View style={[styles.scanCorner, styles.scanCornerTL]} />
+              <View style={[styles.scanCorner, styles.scanCornerTR]} />
+              <View style={[styles.scanCorner, styles.scanCornerBL]} />
+              <View style={[styles.scanCorner, styles.scanCornerBR]} />
+            </View>
+          </View>
+
+          {/* Loading overlay */}
+          {loading && (
+            <View style={styles.cameraLoading}>
+              <ActivityIndicator size="large" color="#fff" />
+              <Text style={styles.cameraLoadingText}>Processing...</Text>
+            </View>
+          )}
+        </View>
       </View>
 
-      <View style={styles.infoContainer}>
+      {/* User Info */}
+      {/* <View style={styles.infoContainer}>
         <Text style={styles.infoText}>
           {user ? `Logged in as: ${user.appUserName}` : 'Not logged in'}
         </Text>
         <Text style={styles.instructionText}>
-          Paste or type the QR value and tap Lookup
+          Position QR code within the camera frame
         </Text>
-      </View>
+      </View> */}
 
+      {/* Footer */}
+      <TouchableOpacity
+        style={styles.footerContainer}
+        onPress={() => Linking.openURL('https://scriptindia.in/')}
+        activeOpacity={0.7}>
+        <Text style={styles.footer}>Designed & Developed by</Text>
+        <Image
+          source={require('../../assets/images/icon.png')}
+          style={styles.footerIcon}
+          resizeMode="contain"
+        />
+      </TouchableOpacity>
+
+      {/* Guest Details / Result Modal */}
       <Modal
         visible={showDialog}
         transparent
@@ -188,19 +324,11 @@ export default function ScanTab() {
                   <View style={styles.employeeDetails}>
                     <View style={styles.detailRow}>
                       <Text style={styles.detailLabel}>Name:</Text>
-                      <Text style={styles.detailText}>{guest.fullName || 'N/A'}</Text>
-                    </View>
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Registration ID:</Text>
-                      <Text style={styles.detailText}>{guest.registrationId}</Text>
+                      <Text style={styles.detailText}>{guest.qrName}</Text>
                     </View>
                     <View style={styles.detailRow}>
                       <Text style={styles.detailLabel}>QR ID:</Text>
                       <Text style={styles.detailText}>{guest.qrId}</Text>
-                    </View>
-                    <View style={styles.detailRow}>
-                      <QrCode size={20} color="#1E1E1E" />
-                      <Text style={styles.detailText}>{guest.qrName}</Text>
                     </View>
                   </View>
                 )}
@@ -221,12 +349,6 @@ export default function ScanTab() {
           </View>
         </View>
       </Modal>
-      <Text style={styles.footer}>
-        Design & Developed By{' '}
-        <Text onPress={() => Linking.openURL('https://scriptindia.in/')}>
-          SCRIPT INDIA
-        </Text>
-      </Text>
     </SafeAreaView>
   );
 }
@@ -236,13 +358,42 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+  centeredMessage: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  permissionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1E1E1E',
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  permissionText: {
+    fontSize: 14,
+    color: '#888',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  permissionButton: {
+    backgroundColor: '#0042BF',
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  permissionButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#D9D9D9',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
   },
   headerTitle: {
     fontSize: 24,
@@ -252,44 +403,164 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: '#1E1E1E',
-    marginTop: 4,
+    marginTop: 2,
   },
   logoutButton: {
     padding: 8,
   },
-  manualContainer: {
-    flex: 1,
-    margin: 20,
-    justifyContent: 'center',
+  divider: {
+    height: 1,
+    backgroundColor: '#D9D9D9',
   },
-  manualInput: {
-    borderWidth: 1,
-    borderColor: '#D9D9D9',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
+
+  /* Scan Action Toggle */
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  actionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
     color: '#1E1E1E',
-    marginBottom: 16,
+    marginRight: 12,
   },
-  buttonDisabled: {
-    opacity: 0.5,
+  actionToggleGroup: {
+    flexDirection: 'row',
+    gap: 8,
   },
+  actionToggle: {
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#0042BF',
+    backgroundColor: '#fff',
+  },
+  actionToggleActive: {
+    backgroundColor: '#0042BF',
+  },
+  actionToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0042BF',
+  },
+  actionToggleTextActive: {
+    color: '#fff',
+  },
+
+  /* Camera */
+  cameraWrapper: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  cameraContainer: {
+    width: CAMERA_SIZE,
+    height: CAMERA_SIZE,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#1a1a1a',
+  },
+  camera: {
+    flex: 1,
+  },
+  scanOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanFrame: {
+    width: CAMERA_SIZE * 0.65,
+    height: CAMERA_SIZE * 0.65,
+    position: 'relative',
+  },
+  scanCorner: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    borderColor: '#fff',
+  },
+  scanCornerTL: {
+    top: 0,
+    left: 0,
+    borderTopWidth: 3,
+    borderLeftWidth: 3,
+    borderTopLeftRadius: 4,
+  },
+  scanCornerTR: {
+    top: 0,
+    right: 0,
+    borderTopWidth: 3,
+    borderRightWidth: 3,
+    borderTopRightRadius: 4,
+  },
+  scanCornerBL: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+    borderBottomLeftRadius: 4,
+  },
+  scanCornerBR: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    borderBottomRightRadius: 4,
+  },
+  cameraLoading: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  cameraLoadingText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 8,
+  },
+
+  /* Info */
   infoContainer: {
-    padding: 20,
+    paddingVertical: 16,
     alignItems: 'center',
   },
   infoText: {
     fontSize: 14,
     color: '#1E1E1E',
     fontWeight: '600',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   instructionText: {
     fontSize: 12,
     color: '#888',
     textAlign: 'center',
   },
+
+  /* Footer */
+  footerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  footer: {
+    fontSize: 19,
+    color: '#666',
+    fontWeight: '500',
+  },
+  footerIcon: {
+    width: 72,
+    height: 72,
+  },
+
+  /* Modal */
   button: {
     width: '80%',
     height: 40,
@@ -406,14 +677,5 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.7)',
     zIndex: 10,
     borderRadius: 12,
-  },
-  footer: {
-    marginTop: 40,
-    fontSize: 16,
-    color: '#1E1E1E',
-    textAlign: 'center',
-    fontWeight: '700',
-    textDecorationLine: 'underline',
-    textDecorationColor: '#1E1E1E',
   },
 });

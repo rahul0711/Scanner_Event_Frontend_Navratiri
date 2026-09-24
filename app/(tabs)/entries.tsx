@@ -1,5 +1,4 @@
-// screens/EntriesTab.tsx
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -9,48 +8,36 @@ import {
   RefreshControl,
   TouchableOpacity,
   Alert,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuthStore } from "@/store/authStore";
-
-import { LogIn, LogOut, Calendar, Clock, User, QrCode } from "lucide-react-native";
+import { LogOut, Calendar, Clock, QrCode, Ticket, Layers } from "lucide-react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { InOutEntry } from "@/lib/types";
 import { apiService } from "@/services/api";
 import { formatDate, formatTime } from "@/lib/date";
 import { useRouter } from "expo-router";
 
-type Tab = "IN" | "OUT";
+type Filter = "ALL" | "1" | "3";
+
+const PASS_META: Record<string, { label: string; color: string; bg: string }> = {
+  "1": { label: "1 Day Pass", color: "#0042BF", bg: "#E8EFFC" },
+  "3": { label: "3 Day Pass", color: "#C2410C", bg: "#FFEDD5" },
+};
+const UNKNOWN_PASS = { label: "No Pass Info", color: "#6B7280", bg: "#F3F4F6" };
+
+const passMeta = (validity: string | null) =>
+  (validity && PASS_META[validity.trim()]) || UNKNOWN_PASS;
 
 export default function EntriesTab() {
   const [entries, setEntries] = useState<InOutEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [tab, setTab] = useState<Tab>("IN");
-  const [inCount, setInCount] = useState<number>(0);
-  const [outCount, setOutCount] = useState<number>(0);
+  const [filter, setFilter] = useState<Filter>("ALL");
   const user = useAuthStore((state) => state.user);
-
   const logout = useAuthStore((state) => state.logout);
   const router = useRouter();
-
-  const flagForTab = (t: Tab) => (t === "IN" ? 1 : 2);
-
-
-  const fetchCounts = async () => {
-    if (!user) return;
-    try {
-      const [i, o] = await Promise.all([
-        apiService.getInOutCount(1),
-        apiService.getInOutCount(2),
-      ]);
-      setInCount(i);
-      setOutCount(o);
-    } catch (err) {
-      console.warn("Failed to fetch counts", err);
-    }
-  };
-
 
   const fetchEntries = async (isRefreshing = false) => {
     if (!user) return;
@@ -60,7 +47,7 @@ export default function EntriesTab() {
 
     try {
       const data = await apiService.getTodayEntries();
-      setEntries(data);
+      setEntries(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error("Failed to fetch entries:", error);
     } finally {
@@ -71,21 +58,35 @@ export default function EntriesTab() {
 
   useFocusEffect(
     useCallback(() => {
-      fetchCounts();
       fetchEntries();
-    }, [user, tab])
+    }, [user])
   );
 
+  const counts = useMemo(() => {
+    const c = { ALL: entries.length, "1": 0, "3": 0 };
+    for (const e of entries) {
+      const v = e.passValidity?.trim();
+      if (v === "1") c["1"]++;
+      else if (v === "3") c["3"]++;
+    }
+    return c;
+  }, [entries]);
 
+  const filteredEntries = useMemo(
+    () =>
+      filter === "ALL"
+        ? entries
+        : entries.filter((e) => e.passValidity?.trim() === filter),
+    [entries, filter]
+  );
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert("Logout", "Are you sure you want to logout?", [
+      { text: "Cancel", style: "cancel" },
       {
-        text: 'Logout',
-        style: 'destructive',
+        text: "Logout",
+        style: "destructive",
         onPress: () => {
-          console.log('Logging out user');
           logout();
           router.replace("/(auth)" as any);
         },
@@ -93,97 +94,132 @@ export default function EntriesTab() {
     ]);
   };
 
-
-
-
-
   const renderEntry = ({ item }: { item: InOutEntry }) => {
-    const isIn = tab === "IN";
+    const meta = passMeta(item.passValidity);
     return (
       <View style={styles.entryCard}>
-        <View style={styles.entryHeader}>
-          <View style={styles.employeeInfo}>
-            <QrCode size={20} color="#1E1E1E" />
-            <Text style={styles.employeeName}>QR ID: {item.qrId}</Text>
+        <View style={[styles.cardAccent, { backgroundColor: meta.color }]} />
+        <View style={styles.cardBody}>
+          <View style={styles.entryHeader}>
+            <View style={[styles.qrIconBox, { backgroundColor: meta.bg }]}>
+              <QrCode size={22} color={meta.color} />
+            </View>
+            <View style={styles.qrTextBlock}>
+              <Text style={styles.qrName} numberOfLines={1}>
+                {item.qrName || "—"}
+              </Text>
+              <Text style={styles.qrId}>QR ID #{item.qrId ?? "—"}</Text>
+            </View>
+            <View style={[styles.passBadge, { backgroundColor: meta.bg }]}>
+              <Ticket size={13} color={meta.color} />
+              <Text style={[styles.passBadgeText, { color: meta.color }]}>
+                {meta.label}
+              </Text>
+            </View>
           </View>
-          <View style={[styles.badge, isIn ? styles.inBadge : styles.outBadge]}>
-            {isIn ? <LogIn size={16} color="#fff" /> : <LogOut size={16} color="#fff" />}
-            <Text style={styles.badgeText}>{tab}</Text>
+
+          <View style={styles.divider} />
+
+          <View style={styles.entryDetails}>
+            <View style={styles.detailItem}>
+              <Calendar size={15} color="#8A8F98" />
+              <Text style={styles.detailText}>{formatDate(item.logDate)}</Text>
+            </View>
+            <View style={styles.detailItem}>
+              <Clock size={15} color="#8A8F98" />
+              <Text style={styles.detailText}>{formatTime(item.logDate)}</Text>
+            </View>
           </View>
         </View>
-
-        <View style={styles.entryDetails}>
-          <View style={styles.detailItem}>
-            <Calendar size={16} color="#888" />
-            <Text style={styles.detailText}>
-              {formatDate(item.logDate)}
-            </Text>
-          </View>
-          <View style={styles.detailItem}>
-            <Clock size={16} color="#888" />
-            <Text style={styles.detailText}>{formatTime(item.logDate)}</Text>
-          </View>
-        </View>
-
-        {/* <View style={styles.entryFooter}>
-          <Text style={styles.footerText}>Registration Id: {item.registrationId || item.childRegistrationId}</Text>
-        </View> */}
       </View>
     );
   };
 
   const keyExtractor = (item: InOutEntry, index: number) =>
-    `${item.registrationId || item.childRegistrationId}-${item.logDate}-${index}`;
+    `${item.eventLogId ?? item.qrId}-${item.logDate}-${index}`;
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-
-        <Header tab={tab} setTab={setTab} count={entries.length} inCount={inCount} outCount={outCount} />
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#0042BF" />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const emptyLabel =
+    filter === "ALL" ? "No entries yet" : `No ${PASS_META[filter].label} entries`;
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>SI Events scanner</Text>
+          <Text style={styles.headerTitle}>SI E-Pass Scanner</Text>
           <Text style={styles.headerSubtitle}>Guest Entries</Text>
         </View>
         <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
           <LogOut size={24} color="#0042BF" />
         </TouchableOpacity>
       </View>
-      <Header tab={tab} setTab={setTab} count={entries.length} inCount={inCount} outCount={outCount} />
 
-      {entries.length === 0 ? (
+      <View style={styles.filtersWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filtersRow}
+        >
+          <FilterChip
+            label="All"
+            count={counts.ALL}
+            active={filter === "ALL"}
+            icon={<Layers size={15} color={filter === "ALL" ? "#fff" : "#0042BF"} />}
+            onPress={() => setFilter("ALL")}
+          />
+          <FilterChip
+            label={PASS_META["1"].label}
+            count={counts["1"]}
+            active={filter === "1"}
+            icon={<Ticket size={15} color={filter === "1" ? "#fff" : "#0042BF"} />}
+            onPress={() => setFilter("1")}
+          />
+          <FilterChip
+            label={PASS_META["3"].label}
+            count={counts["3"]}
+            active={filter === "3"}
+            icon={<Ticket size={15} color={filter === "3" ? "#fff" : "#0042BF"} />}
+            onPress={() => setFilter("3")}
+          />
+          <FilterChip
+            label="Date"
+            active={false}
+            disabled
+            icon={<Calendar size={15} color="#A0A6B1" />}
+            onPress={() => {}}
+          />
+        </ScrollView>
+      </View>
+
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0042BF" />
+        </View>
+      ) : filteredEntries.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>No {tab} entries found</Text>
+          <View style={styles.emptyIconBox}>
+            <QrCode size={36} color="#0042BF" />
+          </View>
+          <Text style={styles.emptyText}>{emptyLabel}</Text>
           <Text style={styles.emptySubtext}>
-            Pull to refresh or switch tabs to see other entries.
+            Pull to refresh or switch filters to see other entries.
           </Text>
-          <TouchableOpacity
-            style={styles.refreshButton}
-            onPress={() => fetchEntries(true)}
-          >
+          <TouchableOpacity style={styles.refreshButton} onPress={() => fetchEntries(true)}>
             <Text style={styles.refreshButtonText}>Refresh</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <FlatList
-          data={entries}
+          data={filteredEntries}
           renderItem={renderEntry}
           keyExtractor={keyExtractor}
           contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={() => fetchEntries(true)}
               colors={["#0042BF"]}
+              tintColor="#0042BF"
             />
           }
         />
@@ -192,176 +228,161 @@ export default function EntriesTab() {
   );
 }
 
-/** Top header with tabs */
-function Header({
-  tab,
-  setTab,
-  count,
-  inCount,
-  outCount,
-}: {
-  tab: "IN" | "OUT";
-  setTab: (t: "IN" | "OUT") => void;
-  count: number;
-  inCount?: number;
-  outCount?: number;
-}) {
-
-  return (
-    <>
-
-      <View style={styles.tabsRow}>
-        <TabButton
-          label="IN"
-          badge={inCount}
-          active={tab === "IN"}
-          icon={<LogIn size={16} color={tab === "IN" ? "#fff" : "#0042BF"} />}
-          onPress={() => setTab("IN")}
-        />
-        {/* <TabButton
-          label="OUT"
-          badge={outCount}
-          active={tab === "OUT"}
-          icon={<LogOut size={16} color={tab === "OUT" ? "#fff" : "#0042BF"} />}
-          onPress={() => setTab("OUT")}
-        /> */}
-      </View>
-    </>
-  );
-}
-
-function TabButton({
+function FilterChip({
   label,
   active,
   icon,
   onPress,
-  badge,
+  count,
+  disabled,
 }: {
   label: string;
   active: boolean;
   icon: React.ReactNode;
   onPress: () => void;
-  badge?: number;
+  count?: number;
+  disabled?: boolean;
 }) {
   return (
     <TouchableOpacity
       onPress={onPress}
-      style={[styles.tabBtn, active ? styles.tabBtnActive : styles.tabBtnIdle]}
+      disabled={disabled}
+      activeOpacity={0.8}
+      style={[
+        styles.chip,
+        active ? styles.chipActive : styles.chipIdle,
+        disabled && styles.chipDisabled,
+      ]}
     >
       {icon}
-      <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
-      {/* small badge */}
-      <View style={styles.tabBadge}>
-        <Text style={styles.tabBadgeText}>{badge ?? 0}</Text>
-      </View>
+      <Text
+        style={[
+          styles.chipText,
+          active && styles.chipTextActive,
+          disabled && styles.chipTextDisabled,
+        ]}
+      >
+        {label}
+      </Text>
+      {count !== undefined && (
+        <View style={[styles.chipBadge, active ? styles.chipBadgeActive : styles.chipBadgeIdle]}>
+          <Text style={[styles.chipBadgeText, active && styles.chipBadgeTextActive]}>
+            {count}
+          </Text>
+        </View>
+      )}
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1, backgroundColor: "#F6F8FC" },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     padding: 20,
+    backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderBottomColor: "#D9D9D9",
+    borderBottomColor: "#E6E9EF",
   },
   headerTitle: { fontSize: 24, fontWeight: "bold", color: "#0042BF" },
   headerSubtitle: { fontSize: 14, color: "#1E1E1E", marginTop: 4 },
-  logoutButton: {
-    padding: 8,
-  },
-  statsContainer: {
-    backgroundColor: "#f5f5f5",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  statsText: { fontSize: 14, fontWeight: "600", color: "#1E1E1E" },
+  logoutButton: { padding: 8 },
 
-  tabsRow: {
-    flexDirection: "row",
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    gap: 8,
+  filtersWrapper: {
+    backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderBottomColor: "#EFEFEF",
-    marginTop: 10,
+    borderBottomColor: "#E6E9EF",
   },
-  tabBtn: {
+  filtersRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  chip: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
+    gap: 6,
   },
-  tabBtnActive: {
-    backgroundColor: "#0042BF",
-    borderColor: "#0042BF",
+  chipActive: { backgroundColor: "#0042BF", borderColor: "#0042BF" },
+  chipIdle: { backgroundColor: "#fff", borderColor: "#C9D6F2" },
+  chipDisabled: { backgroundColor: "#F3F4F6", borderColor: "#E5E7EB", borderStyle: "dashed" },
+  chipText: { fontWeight: "700", fontSize: 13, color: "#0042BF" },
+  chipTextActive: { color: "#fff" },
+  chipTextDisabled: { color: "#A0A6B1" },
+  chipBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+    minWidth: 22,
+    alignItems: "center",
   },
-  tabBtnIdle: {
-    backgroundColor: "#fff",
-    borderColor: "#0042BF",
-  },
-  tabText: { marginLeft: 6, fontWeight: "700", color: "#0042BF" },
-  tabTextActive: { color: "#fff" },
+  chipBadgeActive: { backgroundColor: "#fff" },
+  chipBadgeIdle: { backgroundColor: "#E8EFFC" },
+  chipBadgeText: { color: "#0042BF", fontWeight: "800", fontSize: 11 },
+  chipBadgeTextActive: { color: "#0042BF" },
 
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
-  listContainer: { padding: 20 },
+  listContainer: { padding: 16, paddingBottom: 24 },
 
   entryCard: {
+    flexDirection: "row",
     backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 14,
     marginBottom: 12,
+    overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#D9D9D9",
+    borderColor: "#EAEDF3",
+    shadowColor: "#0B1F4D",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  entryHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  employeeInfo: { flexDirection: "row", alignItems: "center", flex: 1 },
-  employeeName: { fontSize: 18, fontWeight: "700", color: "#1E1E1E", marginLeft: 8 },
-  badge: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  cardAccent: { width: 4 },
+  cardBody: { flex: 1, padding: 14 },
+  entryHeader: { flexDirection: "row", alignItems: "center" },
+  qrIconBox: {
+    width: 44,
+    height: 44,
     borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  inBadge: { backgroundColor: "#28a745" },
-  outBadge: { backgroundColor: "#dc3545" },
-  badgeText: { color: "#fff", fontSize: 14, fontWeight: "bold", marginLeft: 4 },
-  entryDetails: { flexDirection: "row", marginBottom: 8 },
-  detailItem: { flexDirection: "row", alignItems: "center", marginRight: 16 },
-  detailText: { fontSize: 14, color: "#888", marginLeft: 6 },
-  entryFooter: { paddingTop: 8, borderTopWidth: 1, borderTopColor: "#f5f5f5" },
-  footerText: { fontSize: 12, color: "#888" },
+  qrTextBlock: { flex: 1, marginLeft: 12, marginRight: 8 },
+  qrName: { fontSize: 17, fontWeight: "800", color: "#111827", letterSpacing: 1 },
+  qrId: { fontSize: 13, fontWeight: "600", color: "#6B7280", marginTop: 2 },
+  passBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    gap: 4,
+  },
+  passBadgeText: { fontSize: 12, fontWeight: "700" },
+  divider: { height: 1, backgroundColor: "#F0F2F6", marginVertical: 12 },
+  entryDetails: { flexDirection: "row", justifyContent: "space-between" },
+  detailItem: { flexDirection: "row", alignItems: "center" },
+  detailText: { fontSize: 13, color: "#6B7280", marginLeft: 6, fontWeight: "500" },
 
   emptyContainer: { flex: 1, justifyContent: "center", alignItems: "center", padding: 40 },
-  emptyText: { fontSize: 18, fontWeight: "600", color: "#1E1E1E", marginBottom: 8, textAlign: "center" },
+  emptyIconBox: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "#E8EFFC",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  emptyText: { fontSize: 18, fontWeight: "700", color: "#1E1E1E", marginBottom: 8, textAlign: "center" },
   emptySubtext: { fontSize: 14, color: "#888", textAlign: "center", marginBottom: 20 },
-  refreshButton: { backgroundColor: "#0042BF", paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
+  refreshButton: { backgroundColor: "#0042BF", paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10 },
   refreshButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-
-  tabBadge: {
-    marginLeft: 8,
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderWidth: 1,
-    borderColor: "#0042BF",
-  },
-  tabBadgeText: {
-    color: "#0042BF",
-    fontWeight: "700",
-    fontSize: 12,
-  },
 });

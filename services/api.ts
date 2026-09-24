@@ -3,11 +3,11 @@ import axios from 'axios';
 
 // const BASE_URL = "https://eventsgalaxy4u.com";
 const BASE_URL = 'https://events.scriptindia.in';
-const GUEST_LOOKUP_BASE_URL = 'https://demo.scriptindia.in:8156';
+const GUEST_LOOKUP_BASE_URL = 'https://epass.scriptindia.in';
 
 const api = axios.create({
-  baseURL: BASE_URL,
-  headers: {
+  baseURL: GUEST_LOOKUP_BASE_URL,
+  headers: { 
     'Content-Type': 'application/json',
   },
 });
@@ -126,25 +126,6 @@ export const apiService = {
       throw error;
     }
   },
-
-  async getInOutCount(flag: 1 | 2): Promise<number> {
-    try {
-      // API: GET /GetInOutCount?InOutCount=1
-      const { data } = await api.get('/GetEventInCount');
-
-      // backend might return: { count: 10 } or a number directly or [{ Count: 10 }]
-      if (typeof data === 'number') return data;
-      if (data == null) return 0;
-      if (Array.isArray(data) && data.length > 0) {
-        const first = data[0];
-        return Number(first.Count ?? first.count ?? 0) || 0;
-      }
-      return Number(data.Count ?? data.count ?? data.InOutCount ?? 0) || 0;
-    } catch (err) {
-      console.warn('getInOutCount failed', err);
-      return 0;
-    }
-  },
 };
 
 type ScanType = 'IN' | 'OUT';
@@ -182,7 +163,6 @@ function buildPayload(employee: EmployeeLite) {
   const { dateTime, dateOnly } = formatIST();
 
   return {
-    EventLogId: employee.EventLogId != null ? String(employee.EventLogId) : '0',
     DeviceIp: 'Insert using Mobile App',
     LogDate: dateTime, // "YYYY-MM-DD HH:mm:ss"
     QrName: employee.QrName,

@@ -105,10 +105,10 @@ android {
             keyPassword 'android'
         }
         release {
-            storeFile file('iacf.p12')
-            storePassword '123456'
-            keyAlias 'iacf'
-            keyPassword '123456'
+            storeFile file('my-release-key.jks')
+            storePassword 'Sonu12'
+            keyAlias 'my-key-alias'
+            keyPassword 'Sonu12'
         }
     }
     buildTypes {
